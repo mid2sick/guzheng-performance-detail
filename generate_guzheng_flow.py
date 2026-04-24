@@ -3,10 +3,12 @@
 古箏公演細流產生器 — 執行入口。
 
 執行方式：
-    python generate_guzheng_flow.py
+    python generate_guzheng_flow.py --source 資料整合檔.xlsx --output 細流輸出.xlsx
 
-所有可調整參數請至 guzheng/config.py 修改。
+未指定路徑時，預設值來自 guzheng/config.py。
+其他可調整參數請至 guzheng/config.py 修改。
 """
+import argparse
 from openpyxl import load_workbook
 
 from guzheng.config import (
@@ -28,9 +30,19 @@ from guzheng.writer  import build_output_workbook
 from guzheng.styles  import apply_global_font_size
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="古箏公演細流產生器")
+    parser.add_argument("--source", default=SOURCE_XLSX, help="資料整合檔 (.xlsx)")
+    parser.add_argument("--output", default=OUTPUT_XLSX, help="輸出細流檔案路徑 (.xlsx)")
+    parser.add_argument("--debug",  action="store_true",  help="印出每個換場的人員分配過程")
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     print("1. 開始讀檔")
-    src = load_workbook(SOURCE_XLSX, data_only=False)
+    src = load_workbook(args.source, data_only=False)
 
     print("2. 讀曲目與資產")
     song_order, song_assets_sheet = read_song_order_and_assets(src)
@@ -78,14 +90,15 @@ def main():
         transition_time_map=transition_time_map,
         song_time_map=song_time_map,
         duration_map=duration_map,
+        debug=args.debug,
     )
 
     print("10. 套字體")
     apply_global_font_size(out_wb, size=DEFAULT_FONT_SIZE, default_name=DEFAULT_FONT_NAME)
 
     print("11. 存檔")
-    out_wb.save(OUTPUT_XLSX)
-    print(f"已輸出：{OUTPUT_XLSX}")
+    out_wb.save(args.output)
+    print(f"已輸出：{args.output}")
 
 
 if __name__ == "__main__":

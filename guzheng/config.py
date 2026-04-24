@@ -8,9 +8,8 @@ from typing import Dict, List
 # =========================
 # 檔案路徑
 # =========================
-SOURCE_XLSX  = r"C:\Users\leo41\OneDrive\桌面\古箏社2026細流相關\輸出檔案\古箏社公演_資料整合檔_0317.xlsx"
-TEMPLATE_XLSX = r"C:\Users\leo41\OneDrive\桌面\古箏社2026細流相關\桌面\2025公演細流.xlsx"
-OUTPUT_XLSX  = r"C:\Users\leo41\OneDrive\桌面\古箏社2026細流相關\2026公演細流_第九版.xlsx"
+SOURCE_XLSX  = r"古箏社公演_資料整合檔_0317.xlsx"
+OUTPUT_XLSX  = r"細流第九版.xlsx"
 
 # =========================
 # 演出流程設定

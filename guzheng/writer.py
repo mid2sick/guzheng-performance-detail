@@ -88,6 +88,7 @@ def build_output_workbook(
     transition_time_map: Dict[TransitionKey, str],
     song_time_map:       Dict[str, str],
     duration_map:        Dict[str, str],
+    debug:               bool = False,
 ) -> Workbook:
     wb = Workbook()
     ws = wb.active
@@ -128,6 +129,7 @@ def build_output_workbook(
             is_pre_row=is_pre,
             is_before_intermission=before_intermission,
             is_last_song_teardown=last_teardown,
+            debug=debug,
         )
 
         ws.cell(current_row, 1, transition_time_map.get((prev_song, next_song, row_type), ""))
