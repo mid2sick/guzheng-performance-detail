@@ -5,7 +5,7 @@
 ## 執行方式
 
 ```bash
-python generate_guzheng_flow.py
+python generate_guzheng_flow.py [--source 古箏社公演_資料整合檔_0317.xlsx] [--output 細流第XX版.xlsx] [--debug]
 ```
 
 所有可調整參數（檔案路徑、時間設定、布幕人員等）集中在 `guzheng/config.py`。
