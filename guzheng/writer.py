@@ -32,6 +32,7 @@ _COLUMNS = [
     (6, "箏架、譜架、椅子",        28),
     (7, "上箏",                   24),
     (8, "備註",                   18),
+    (9, "閒置人員",               20),
 ]
 NUM_COLS = len(_COLUMNS)
 
@@ -119,7 +120,7 @@ def build_output_workbook(
     ):
         nonlocal current_row
 
-        left, mid, right = generate_transition(
+        left, mid, right, idle = generate_transition(
             prev_song, next_song,
             song_assets.get(prev_song) if prev_song else None,
             song_assets.get(next_song) if next_song else None,
@@ -136,6 +137,7 @@ def build_output_workbook(
         ws.cell(current_row, 5, left)
         ws.cell(current_row, 6, mid)
         ws.cell(current_row, 7, right)
+        ws.cell(current_row, 9, idle)
         style_row(ws, current_row, NUM_COLS, fill=None)
         current_row += 1
 

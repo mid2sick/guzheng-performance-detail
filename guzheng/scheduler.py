@@ -41,6 +41,9 @@ class TaskBucket:
     def add_vacancy(self, task: str):
         self._vacancies.append(task)
 
+    def people(self) -> set:
+        return set(self._tasks.keys())
+
     def dump(self) -> str:
         parts = [
             f"【{person}】" + "、".join(tasks)
@@ -373,21 +376,26 @@ def generate_transition(
     is_before_intermission: bool = False,
     is_last_song_teardown:  bool = False,
     debug:                  bool = False,
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, str]:
     """
-    計算換場列的三欄內容。
+    計算換場列的四欄內容。
 
-    E（left）  — 表演者自己下箏 / 下樂器
-    F（middle）— 後台人員調整箏架、木椅、鋼琴椅（G 分配後剩餘人員）
-    G（right） — 後台人員上箏、特殊樂器上台（優先分配）
+    E（left）   — 表演者自己下箏 / 下樂器
+    F（middle） — 下一場表演者優先自己上/調整箏架、木椅；後台人員處理剩餘工作
+    G（right）  — 後台人員上箏、特殊樂器上台
+    I（idle）   — 該時間段無任務的後台人員
 
-    分配順序：G 先、F 後，確保上箏人員不與下架人員重疊。
+    分配順序：
+      1. left — 上一場表演者各自下樂器
+      2. middle（優先）— 下一場表演者自己上或調整自己的箏架、木椅
+      3. right — 後台人員上箏；特殊樂器表演者自帶
+      4. middle（剩餘）— 箏架下/調/上、木椅下/調/上、鋼琴椅（後台）
     F 人手不足時輸出【空缺】。
     """
     if is_pre_row:
-        return "", "", ""
+        return "", "", "", ""
     if not prev_assets or not prev_people:
-        return "", "", ""
+        return "", "", "", ""
 
     _dbg: any = (lambda msg: print(f"[debug] {msg}")) if debug else (lambda _: None)
 
@@ -412,7 +420,13 @@ def generate_transition(
         left.add(name, "下低音提琴")
 
     if is_before_intermission:
-        return left.dump(), "", ""
+        on_stage = prev_people.all_names() | (next_people.all_names() if next_people else set())
+        _IDLE_EXCLUDE_ROLES = {"tuning", "general_other"}
+        idle_str = "\n".join(sorted(
+            p for p, r in backstage_roles.items()
+            if p not in on_stage and r not in _IDLE_EXCLUDE_ROLES
+        ))
+        return left.dump(), "", "", idle_str
 
     # ── 建立人員池 ───────────────────────────────────────────────
     if next_people is None:
@@ -447,8 +461,64 @@ def generate_transition(
         picker.add_workload(curtain_person, 1)
         _dbg(f"[布幕] {curtain_person} ← {curtain_task}")
 
+    # ── 計算箏架與木椅的調整/上/下需求 ──────────────────────────
+    prev_stands = stand_counter(prev_assets.stands)
+    next_stands = stand_counter(next_assets.stands if next_assets else [])
+    prev_chairs = prev_assets.wood_chair_count
+    next_chairs = next_assets.wood_chair_count if next_assets else 0
+
+    all_stand_types = set(list(prev_stands.keys()) + list(next_stands.keys()))
+    # 各類型箏架的剩餘調整/上/下數量（表演者優先步驟後會更新）
+    rem_adj  = {t: min(prev_stands.get(t, 0), next_stands.get(t, 0)) for t in all_stand_types}
+    rem_up   = {t: max(next_stands.get(t, 0) - prev_stands.get(t, 0), 0) for t in all_stand_types}
+    rem_down = {t: max(prev_stands.get(t, 0) - next_stands.get(t, 0), 0) for t in all_stand_types}
+
+    rem_adj_chairs  = min(prev_chairs, next_chairs)
+    rem_up_chairs   = max(next_chairs - prev_chairs, 0)
+    rem_down_chairs = max(prev_chairs - next_chairs, 0)
+
     # ════════════════════════════════════════════════════════════
-    # G（right）— 優先分配：特殊樂器 + 上箏
+    # F（middle）優先 — 下一場表演者自己上或調整自己的箏架、木椅
+    # ════════════════════════════════════════════════════════════
+    for name, guzheng, stand in next_people.guzheng_players:
+        if not name:
+            continue
+        stand_type = normalize_stand_full(stand) if stand else ""
+
+        # 箏架任務：有剩餘調整名額優先調整，否則上架
+        if stand_type and rem_adj.get(stand_type, 0) > 0:
+            middle.add(name, f"調整{stand_type}*1")
+            rem_adj[stand_type] -= 1
+            picker.mark_middle_assigned(name)
+            picker.add_workload(name, 1)
+            picker.mark_middle_heavy(name)
+            _dbg(f"[F-表演者] 調整{stand_type}*1 → {name}")
+        elif stand_type and rem_up.get(stand_type, 0) > 0:
+            middle.add(name, f"上{stand_type}*1")
+            rem_up[stand_type] -= 1
+            picker.mark_middle_assigned(name)
+            picker.mark_up_action(name)
+            picker.add_workload(name, 1)
+            picker.mark_middle_heavy(name)
+            _dbg(f"[F-表演者] 上{stand_type}*1 → {name}")
+
+        # 木椅任務：有剩餘調整名額優先調整，否則上椅
+        if rem_adj_chairs > 0:
+            middle.add(name, "調整木椅*1")
+            rem_adj_chairs -= 1
+            picker.add_workload(name, 1)
+            picker.mark_middle_heavy(name)
+            _dbg(f"[F-表演者] 調整木椅*1 → {name}")
+        elif rem_up_chairs > 0:
+            middle.add(name, "上木椅*1")
+            rem_up_chairs -= 1
+            picker.mark_up_action(name)
+            picker.add_workload(name, 1)
+            picker.mark_middle_heavy(name)
+            _dbg(f"[F-表演者] 上木椅*1 → {name}")
+
+    # ════════════════════════════════════════════════════════════
+    # G（right）— 特殊樂器表演者自帶 + 後台人員上箏
     # ════════════════════════════════════════════════════════════
 
     for name in next_people.percussion_players:
@@ -482,11 +552,8 @@ def generate_transition(
             _dbg(f"[G] 上{instrument} → （無可用人員，跳過）")
 
     # ════════════════════════════════════════════════════════════
-    # F（middle）— 箏架 + 木椅 + 鋼琴椅
+    # F（middle）剩餘 — 箏架（下/調/上）+ 木椅（下/調/上）+ 鋼琴椅
     # ════════════════════════════════════════════════════════════
-
-    prev_stands = stand_counter(prev_assets.stands)
-    next_stands = stand_counter(next_assets.stands if next_assets else [])
 
     for stand_type in STAND_TYPES:
         A = prev_stands.get(stand_type, 0)
@@ -495,9 +562,9 @@ def generate_transition(
             continue
 
         # 下架：一次最多 2 組，workload 計 1
-        remain_down = max(A - B, 0)
-        while remain_down > 0:
-            chunk = min(2, remain_down)
+        need_down = rem_down.get(stand_type, 0)
+        while need_down > 0:
+            chunk = min(2, need_down)
             person = picker.pick_for_stand_down()
             if person:
                 middle.add(person, f"下{stand_type}*{chunk}")
@@ -509,12 +576,12 @@ def generate_transition(
             else:
                 middle.add_vacancy(f"下{stand_type}*{chunk}")
                 _dbg(f"[F] 下{stand_type}*{chunk} → 【空缺】")
-            remain_down -= chunk
+            need_down -= chunk
 
-        # 調整架
-        remain_adj = min(A, B)
-        while remain_adj > 0:
-            chunk = min(2, remain_adj)
+        # 調整架（剩餘）
+        need_adj = rem_adj.get(stand_type, 0)
+        while need_adj > 0:
+            chunk = min(2, need_adj)
             if curtain_pending and curtain_person:
                 chunk = 1  # 布幕人員最多附帶調整 1 個架
                 person = curtain_person
@@ -533,10 +600,11 @@ def generate_transition(
                 picker.mark_middle_assigned(person)
             else:
                 middle.add_vacancy(f"調整{stand_type}*{chunk}")
-            remain_adj -= chunk
+            need_adj -= chunk
 
-        # 上架
-        for _ in range(max(B - A, 0)):
+        # 上架（剩餘）
+        need_up = rem_up.get(stand_type, 0)
+        for _ in range(need_up):
             person = picker.pick_specific_for_up_stand(stand_type, next_player_stand_map)
             src = "自己上架"
             if person is None:
@@ -553,49 +621,27 @@ def generate_transition(
                 middle.add_vacancy(f"上{stand_type}*1")
                 _dbg(f"[F] 上{stand_type}*1 → 【空缺】")
 
-    # ── 木椅 ─────────────────────────────────────────────────────
-    prev_chairs = prev_assets.wood_chair_count
-    next_chairs = next_assets.wood_chair_count if next_assets else 0
+    # ── 木椅（剩餘）────────────────────────────────────────────
 
-    if prev_chairs > next_chairs:
-        # 下椅子：每人一次最多下 3 張，workload 計 1
-        remain_down_chairs = prev_chairs - next_chairs
-        while remain_down_chairs > 0:
-            chunk = min(3, remain_down_chairs)
-            person = picker.pick_for_stand_down()
-            if person:
-                middle.add(person, f"下木椅*{chunk}")
-                picker.add_workload(person, 1)
-                picker.mark_middle_heavy(person)
-                picker.mark_middle_assigned(person)
-                picker.mark_down_action(person)
-                _dbg(f"[F] 下木椅*{chunk} → {person} (workload:{picker.workload[person]})")
-            else:
-                middle.add_vacancy(f"下木椅*{chunk}")
-                _dbg(f"[F] 下木椅*{chunk} → 【空缺】")
-            remain_down_chairs -= chunk
+    # 下椅子：每人一次最多下 3 張，workload 計 1
+    while rem_down_chairs > 0:
+        chunk = min(3, rem_down_chairs)
+        person = picker.pick_for_stand_down()
+        if person:
+            middle.add(person, f"下木椅*{chunk}")
+            picker.add_workload(person, 1)
+            picker.mark_middle_heavy(person)
+            picker.mark_middle_assigned(person)
+            picker.mark_down_action(person)
+            _dbg(f"[F] 下木椅*{chunk} → {person} (workload:{picker.workload[person]})")
+        else:
+            middle.add_vacancy(f"下木椅*{chunk}")
+            _dbg(f"[F] 下木椅*{chunk} → 【空缺】")
+        rem_down_chairs -= chunk
 
-    elif next_chairs > prev_chairs:
-        remain = next_chairs - prev_chairs
-        while remain > 0:
-            chunk = min(2, remain)
-            person = picker.pick_for_middle_up(required_workload=chunk)
-            if person:
-                middle.add(person, f"上木椅*{chunk}")
-                picker.add_workload(person, chunk)
-                picker.mark_middle_heavy(person)
-                picker.mark_middle_assigned(person)
-                picker.mark_up_action(person)
-                _dbg(f"[F] 上木椅*{chunk} → {person} (workload:{picker.workload[person]})")
-            else:
-                middle.add_vacancy(f"上木椅*{chunk}")
-                _dbg(f"[F] 上木椅*{chunk} → 【空缺】")
-            remain -= chunk
-
-    # 調整木椅
-    remain_adj_chairs = min(prev_chairs, next_chairs)
-    while remain_adj_chairs > 0:
-        chunk = min(2, remain_adj_chairs)
+    # 調整木椅（剩餘）
+    while rem_adj_chairs > 0:
+        chunk = min(2, rem_adj_chairs)
         if curtain_pending and curtain_person:
             chunk = 1  # 布幕人員最多附帶調整 1 張椅子
             person = curtain_person
@@ -614,7 +660,23 @@ def generate_transition(
             picker.mark_middle_assigned(person)
         else:
             middle.add_vacancy(f"調整木椅*{chunk}")
-        remain_adj_chairs -= chunk
+        rem_adj_chairs -= chunk
+
+    # 上木椅（剩餘）
+    while rem_up_chairs > 0:
+        chunk = min(2, rem_up_chairs)
+        person = picker.pick_for_middle_up(required_workload=chunk)
+        if person:
+            middle.add(person, f"上木椅*{chunk}")
+            picker.add_workload(person, chunk)
+            picker.mark_middle_heavy(person)
+            picker.mark_middle_assigned(person)
+            picker.mark_up_action(person)
+            _dbg(f"[F] 上木椅*{chunk} → {person} (workload:{picker.workload[person]})")
+        else:
+            middle.add_vacancy(f"上木椅*{chunk}")
+            _dbg(f"[F] 上木椅*{chunk} → 【空缺】")
+        rem_up_chairs -= chunk
 
     # ── 鋼琴椅 ───────────────────────────────────────────────────
     prev_has_piano = bool(prev_people.piano_players)
@@ -647,4 +709,11 @@ def generate_transition(
             middle.add_vacancy("下鋼琴椅*1")
             _dbg(f"[F] 下鋼琴椅*1 → 【空缺】")
 
-    return left.dump(), middle.dump(), right.dump()
+    on_stage = prev_people.all_names() | next_people.all_names()
+    busy = middle.people() | right.people()
+    _IDLE_EXCLUDE_ROLES = {"tuning", "general_other"}
+    idle_str = "\n".join(sorted(
+        p for p, r in backstage_roles.items()
+        if p not in on_stage and p not in busy and r not in _IDLE_EXCLUDE_ROLES
+    ))
+    return left.dump(), middle.dump(), right.dump(), idle_str
