@@ -16,8 +16,8 @@ OUTPUT_XLSX  = r"細流第九版.xlsx"
 # =========================
 INTERMISSION_AFTER = 5          # 中場休息插在第 5 首與第 6 首之間
 
-PRIMARY_CURTAIN = ""         # 要設定主要布幕人員
-BACKUP_CURTAIN  = ""         # 要設定支援布幕人員
+PRIMARY_CURTAIN = ""         # 需要設定主要布幕人員
+BACKUP_CURTAIN  = ""         # 需要設定支援布幕人員
 
 INTERMISSION_LABEL = "中場休息"
 
