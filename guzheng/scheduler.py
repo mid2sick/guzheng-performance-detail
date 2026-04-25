@@ -77,6 +77,7 @@ class PoolPicker:
 
     def __init__(
         self,
+        # TODO: next_helpers 理論上只負責上/調整自己的箏架、椅子，可能不需要放入 PoolPicker 作為其他任務的候選人
         next_helpers: List[str],
         core:         List[str],
         mic:          List[str],
