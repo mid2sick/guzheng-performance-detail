@@ -6,6 +6,7 @@ Excel 視覺樣式層。
 from __future__ import annotations
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.cell import Cell
+from openpyxl.cell.rich_text import CellRichText, TextBlock, InlineFont
 from openpyxl.workbook import Workbook
 
 # =========================
@@ -15,6 +16,7 @@ _COLOR_HEADER       = "D9E2F3"   # 表頭列：淡藍
 _COLOR_SONG         = "DDEBF7"   # 曲目列：更淡藍
 _COLOR_INTERMISSION = "EDEDED"   # 中場 / 結尾：淺灰
 _COLOR_BORDER       = "D9D9D9"   # 細框線：淺灰
+_COLOR_VACANCY      = "FF0000"   # 空缺行：紅字
 
 # 預設儲存格字體（資料列）
 _DEFAULT_CELL_FONT = "Microsoft JhengHei"
@@ -62,6 +64,23 @@ def style_row(ws, row: int, num_cols: int, fill: PatternFill | None, bold: bool 
 # =========================
 # 全域字體大小統一
 # =========================
+def apply_vacancy_color(cell: Cell) -> None:
+    """將儲存格中含【空缺】的行標記為紅字，其餘行維持預設樣式。"""
+    text = cell.value
+    if not text or "【空缺】" not in str(text):
+        return
+    red = InlineFont(color=_COLOR_VACANCY)
+    parts: list = []
+    lines = str(text).split("\n")
+    for i, line in enumerate(lines):
+        suffix = "\n" if i < len(lines) - 1 else ""
+        if "【空缺】" in line:
+            parts.append(TextBlock(red, line + suffix))
+        else:
+            parts.append(line + suffix)
+    cell.value = CellRichText(*parts)
+
+
 def apply_global_font_size(wb: Workbook, size: int = 10, default_name: str = "Calibri"):
     """
     保留原本粗體 / 斜體 / 底線等設定，只統一字體大小為指定值。

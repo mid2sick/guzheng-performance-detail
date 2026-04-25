@@ -15,7 +15,7 @@ from .scheduler import generate_transition
 from .styles import (
     HEADER_FONT_SIZE,
     header_fill, song_fill, intermission_fill, thin_border,
-    style_cell, style_row,
+    style_cell, style_row, apply_vacancy_color,
 )
 from .utils import stand_for_performer
 
@@ -139,6 +139,8 @@ def build_output_workbook(
         ws.cell(current_row, 7, right)
         ws.cell(current_row, 9, idle)
         style_row(ws, current_row, NUM_COLS, fill=None)
+        for col in (5, 6, 7):
+            apply_vacancy_color(ws.cell(current_row, col))
         current_row += 1
 
     # ── 開場前置換場列 ────────────────────────────────────────
