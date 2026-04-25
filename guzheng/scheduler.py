@@ -5,11 +5,11 @@
 核心流程（generate_transition）：
   right  — 後台人員先搶佔上箏 / 上樂器（G 欄，優先分配）
   left   — 上一首表演者自己下箏 / 下樂器（E 欄，自助）
-  middle — 後台人員調整箏架、木椅、鋼琴椅（F 欄，G 分配後剩餘人員）
+  middle — 下一場表演者自己上/調整箏架與木椅；後台人員下架、下木椅、鋼琴椅（F 欄）
 
 人員池（PoolPicker）以 workload 平衡指派，並追蹤：
   - 每人累積工作量上限 2
-  - 上台類任務（上箏 / 上架）上限 1
+  - 上台類任務（上箏）上限 1
   - G 與 F 的人員互斥（已分 G 的人不進 F，反之亦然）
   - 已做「下」類任務的人不再被指派上鋼琴椅
   - 下架一次最多 2 組（workload 計 1）
@@ -62,17 +62,17 @@ class PoolPicker:
     人員池管理與任務指派。
 
     四個池（優先序由高到低）：
-      next_helpers — 下一首古箏表演者（換場期間可進中台，但快要上台）
+      next_helpers — 下一首古箏表演者（換場期間負責上和調整自己的箏架、椅子，準備上台）
       core         — general_core 後台人員
       mic          — mic 後台人員
       control      — control 後台人員
 
     兩個互斥集合：
-      blocked_for_right  — 已在 F 指派，不再進 G
-      blocked_for_middle — 已在 G 指派，不再進 F
+      blocked_for_right  — 已在 F 負責調整箏架木椅，不再進 G 上箏
+      blocked_for_middle — 已在 G 負責上箏，不再進 F 調整箏架木椅
 
     down_workers：已執行下架 / 下椅子 / 下鋼琴椅，不可再執行另一次下架 / 下椅子，也不可接上鋼琴椅。
-    curtain_workers：布幕人員，排除於一般 F 選人，只能透過 curtain_pending 機制取得一個附加任務。
+    curtain_workers：布幕人員，排除於一般 F 選人，完成布幕任務後不再接受其他任務。
     """
 
     def __init__(
@@ -90,7 +90,6 @@ class PoolPicker:
         self.workload:             Dict[str, int] = defaultdict(int)
         self.up_guzheng_count:     Dict[str, int] = defaultdict(int)
         self.up_action_count:      Dict[str, int] = defaultdict(int)
-        self.middle_heavy_workers: set[str]       = set()
         self.blocked_for_right:    set[str]       = set()
         self.blocked_for_middle:   set[str]       = set()
         self.down_workers:         set[str]       = set()
@@ -101,10 +100,6 @@ class PoolPicker:
     def add_workload(self, person: Optional[str], amount: int = 1):
         if person:
             self.workload[person] += amount
-
-    def mark_middle_heavy(self, person: Optional[str]):
-        if person:
-            self.middle_heavy_workers.add(person)
 
     def mark_middle_assigned(self, person: Optional[str]):
         """已在 F 指派 → 不可再進 G。"""
@@ -199,18 +194,6 @@ class PoolPicker:
 
     # ---------- F（middle）任務選人 ----------
 
-    def _middle_pools(self) -> List[List[str]]:
-        excl = self.blocked_for_middle | self.curtain_workers
-        return [
-            [p for p in self.next_helpers if p not in excl],
-            [p for p in self.core         if p not in excl],
-            [p for p in self.mic          if p not in excl],
-            [p for p in self.control      if p not in excl],
-        ]
-
-    def pick_for_stand_adjust(self, required_workload: int = 1) -> Optional[str]:
-        return self._pick_by_priority(self._middle_pools(), required_workload=required_workload)
-
     def pick_for_stand_down(self, required_workload: int = 1) -> Optional[str]:
         """下架 / 下木椅 / 下鋼琴椅：只用 core → mic → control；已執行過下類任務的人不再選。"""
         excl = self.blocked_for_middle | self.down_workers | self.curtain_workers
@@ -221,25 +204,6 @@ class PoolPicker:
                 [p for p in self.control if p not in excl],
             ],
             required_workload=required_workload,
-        )
-
-    def pick_for_chair_adjust(self, required_workload: int = 1) -> Optional[str]:
-        excl = self.blocked_for_middle | self.curtain_workers
-        return self._pick_by_priority(
-            [
-                [p for p in self.next_helpers if p not in excl],
-                [p for p in self.core         if p not in excl],
-                [p for p in self.control      if p not in excl],
-            ],
-            required_workload=required_workload,
-        )
-
-    def pick_for_middle_up(self, required_workload: int = 1) -> Optional[str]:
-        """上架 / 上木椅 / 上鋼琴椅（上台類）：需要 up_action 名額。"""
-        return self._pick_by_priority(
-            self._middle_pools(),
-            required_workload=required_workload,
-            require_up_action=True,
         )
 
     def pick_for_piano_up(self) -> Optional[str]:
@@ -256,45 +220,16 @@ class PoolPicker:
             require_up_action=True,
         )
 
-    def pick_specific_for_up_stand(
-        self,
-        stand_type:            str,
-        next_player_stand_map: Dict[str, str],
-    ) -> Optional[str]:
-        excl = self.blocked_for_middle
-        candidates = [
-            p for p in self.next_helpers
-            if p not in excl
-            and next_player_stand_map.get(p) == stand_type
-            and self._can_take_workload(p, 1)
-            and self._can_take_up_action(p)
-        ]
-        return self._least_loaded(candidates, require_up_action=True)
-
     # ---------- G（right）任務選人 ----------
 
     def pick_for_up_guzheng(self) -> Optional[str]:
-        """
-        上箏規則：
-          第一輪（每人最多 1 台）：control → core → next_helpers → mic
-          第二輪（每人最多 2 台，core 不參與）：control → next_helpers → mic
-          每輪先避開 middle_heavy_workers，再放寬。
-          blocked_for_right 始終作為硬限制（G 先跑時通常為空）。
-        """
-        pools_r1 = [self.control, self.core, self.next_helpers, self.mic]
-        pools_r2 = [self.control, self.next_helpers, self.mic]
-
-        for pools, cap in [(pools_r1, 1), (pools_r2, 2)]:
-            for exclude in [
-                self.middle_heavy_workers | self.blocked_for_right,
-                self.blocked_for_right,
-            ]:
-                for pool in pools:
-                    person = self._pick_from_pool_capped(
-                        pool, cap, exclude=exclude, require_up_action=True
-                    )
-                    if person:
-                        return person
+        """control → core → next_helpers → mic，blocked_for_right 為硬限制。"""
+        for pool in [self.control, self.core, self.next_helpers, self.mic]:
+            person = self._pick_from_pool_capped(
+                pool, 1, exclude=self.blocked_for_right, require_up_action=True
+            )
+            if person:
+                return person
 
         return None
 
@@ -310,16 +245,6 @@ def stand_counter(stands: List[str]) -> Counter:
         if key:
             out[key] += 1
     return out
-
-
-def build_next_player_stand_map(next_people: Optional[SongPeople]) -> Dict[str, str]:
-    if not next_people:
-        return {}
-    return {
-        name: normalize_stand_full(stand)
-        for name, _, stand in next_people.guzheng_players
-        if name and stand
-    }
 
 
 def build_support_lists(
@@ -389,7 +314,7 @@ def generate_transition(
       1. left — 上一場表演者各自下樂器
       2. middle（優先）— 下一場表演者自己上或調整自己的箏架、木椅
       3. right — 後台人員上箏；特殊樂器表演者自帶
-      4. middle（剩餘）— 箏架下/調/上、木椅下/調/上、鋼琴椅（後台）
+      4. middle（剩餘）— 下箏架、下木椅、下鋼琴椅（後台）
     F 人手不足時輸出【空缺】。
     """
     if is_pre_row:
@@ -436,7 +361,6 @@ def generate_transition(
         prev_people, next_people, backstage_roles
     )
     picker = PoolPicker(next_helpers, core, mic, control)
-    next_player_stand_map = build_next_player_stand_map(next_people)
 
     if debug:
         print(f"[debug] 人員池 | next_helpers={next_helpers} core={core} mic={mic} control={control}")
@@ -448,7 +372,6 @@ def generate_transition(
         primary_curtain=PRIMARY_CURTAIN,
         backup_curtain=BACKUP_CURTAIN,
     )
-    curtain_pending = bool(curtain_person)
     if curtain_person:
         curtain_task = (
             "敬禮時按降幕"
@@ -491,7 +414,6 @@ def generate_transition(
             rem_adj[stand_type] -= 1
             picker.mark_middle_assigned(name)
             picker.add_workload(name, 1)
-            picker.mark_middle_heavy(name)
             _dbg(f"[F-表演者] 調整{stand_type}*1 → {name}")
         elif stand_type and rem_up.get(stand_type, 0) > 0:
             middle.add(name, f"上{stand_type}*1")
@@ -499,7 +421,6 @@ def generate_transition(
             picker.mark_middle_assigned(name)
             picker.mark_up_action(name)
             picker.add_workload(name, 1)
-            picker.mark_middle_heavy(name)
             _dbg(f"[F-表演者] 上{stand_type}*1 → {name}")
 
         # 木椅任務：有剩餘調整名額優先調整，否則上椅
@@ -507,14 +428,12 @@ def generate_transition(
             middle.add(name, "調整木椅*1")
             rem_adj_chairs -= 1
             picker.add_workload(name, 1)
-            picker.mark_middle_heavy(name)
             _dbg(f"[F-表演者] 調整木椅*1 → {name}")
         elif rem_up_chairs > 0:
             middle.add(name, "上木椅*1")
             rem_up_chairs -= 1
             picker.mark_up_action(name)
             picker.add_workload(name, 1)
-            picker.mark_middle_heavy(name)
             _dbg(f"[F-表演者] 上木椅*1 → {name}")
 
     # ════════════════════════════════════════════════════════════
@@ -552,15 +471,10 @@ def generate_transition(
             _dbg(f"[G] 上{instrument} → （無可用人員，跳過）")
 
     # ════════════════════════════════════════════════════════════
-    # F（middle）剩餘 — 箏架（下/調/上）+ 木椅（下/調/上）+ 鋼琴椅
+    # F（middle）剩餘 — 箏架下、木椅下、鋼琴椅
     # ════════════════════════════════════════════════════════════
 
     for stand_type in STAND_TYPES:
-        A = prev_stands.get(stand_type, 0)
-        B = next_stands.get(stand_type, 0)
-        if A == 0 and B == 0:
-            continue
-
         # 下架：一次最多 2 組，workload 計 1
         need_down = rem_down.get(stand_type, 0)
         while need_down > 0:
@@ -569,7 +483,6 @@ def generate_transition(
             if person:
                 middle.add(person, f"下{stand_type}*{chunk}")
                 picker.add_workload(person, 1)
-                picker.mark_middle_heavy(person)
                 picker.mark_middle_assigned(person)
                 picker.mark_down_action(person)
                 _dbg(f"[F] 下{stand_type}*{chunk} → {person} (workload:{picker.workload[person]})")
@@ -577,49 +490,6 @@ def generate_transition(
                 middle.add_vacancy(f"下{stand_type}*{chunk}")
                 _dbg(f"[F] 下{stand_type}*{chunk} → 【空缺】")
             need_down -= chunk
-
-        # 調整架（剩餘）
-        need_adj = rem_adj.get(stand_type, 0)
-        while need_adj > 0:
-            chunk = min(2, need_adj)
-            if curtain_pending and curtain_person:
-                chunk = 1  # 布幕人員最多附帶調整 1 個架
-                person = curtain_person
-                curtain_pending = False
-                _dbg(f"[F] 調整{stand_type}*{chunk} → {person}（布幕人員附帶）")
-            else:
-                person = picker.pick_for_stand_adjust(required_workload=chunk)
-                if person:
-                    _dbg(f"[F] 調整{stand_type}*{chunk} → {person} (workload:{picker.workload[person]+chunk})")
-                else:
-                    _dbg(f"[F] 調整{stand_type}*{chunk} → 【空缺】")
-            if person:
-                middle.add(person, f"調整{stand_type}*{chunk}")
-                picker.add_workload(person, chunk)
-                picker.mark_middle_heavy(person)
-                picker.mark_middle_assigned(person)
-            else:
-                middle.add_vacancy(f"調整{stand_type}*{chunk}")
-            need_adj -= chunk
-
-        # 上架（剩餘）
-        need_up = rem_up.get(stand_type, 0)
-        for _ in range(need_up):
-            person = picker.pick_specific_for_up_stand(stand_type, next_player_stand_map)
-            src = "自己上架"
-            if person is None:
-                person = picker.pick_for_middle_up()
-                src = "指派"
-            if person:
-                middle.add(person, f"上{stand_type}*1")
-                picker.add_workload(person, 1)
-                picker.mark_middle_heavy(person)
-                picker.mark_middle_assigned(person)
-                picker.mark_up_action(person)
-                _dbg(f"[F] 上{stand_type}*1 → {person}（{src}，workload:{picker.workload[person]}）")
-            else:
-                middle.add_vacancy(f"上{stand_type}*1")
-                _dbg(f"[F] 上{stand_type}*1 → 【空缺】")
 
     # ── 木椅（剩餘）────────────────────────────────────────────
 
@@ -630,7 +500,6 @@ def generate_transition(
         if person:
             middle.add(person, f"下木椅*{chunk}")
             picker.add_workload(person, 1)
-            picker.mark_middle_heavy(person)
             picker.mark_middle_assigned(person)
             picker.mark_down_action(person)
             _dbg(f"[F] 下木椅*{chunk} → {person} (workload:{picker.workload[person]})")
@@ -638,45 +507,6 @@ def generate_transition(
             middle.add_vacancy(f"下木椅*{chunk}")
             _dbg(f"[F] 下木椅*{chunk} → 【空缺】")
         rem_down_chairs -= chunk
-
-    # 調整木椅（剩餘）
-    while rem_adj_chairs > 0:
-        chunk = min(2, rem_adj_chairs)
-        if curtain_pending and curtain_person:
-            chunk = 1  # 布幕人員最多附帶調整 1 張椅子
-            person = curtain_person
-            curtain_pending = False
-            _dbg(f"[F] 調整木椅*{chunk} → {person}（布幕人員附帶）")
-        else:
-            person = picker.pick_for_chair_adjust(required_workload=chunk)
-            if person:
-                _dbg(f"[F] 調整木椅*{chunk} → {person} (workload:{picker.workload[person]+chunk})")
-            else:
-                _dbg(f"[F] 調整木椅*{chunk} → 【空缺】")
-        if person:
-            middle.add(person, f"調整木椅*{chunk}")
-            picker.add_workload(person, chunk)
-            picker.mark_middle_heavy(person)
-            picker.mark_middle_assigned(person)
-        else:
-            middle.add_vacancy(f"調整木椅*{chunk}")
-        rem_adj_chairs -= chunk
-
-    # 上木椅（剩餘）
-    while rem_up_chairs > 0:
-        chunk = min(2, rem_up_chairs)
-        person = picker.pick_for_middle_up(required_workload=chunk)
-        if person:
-            middle.add(person, f"上木椅*{chunk}")
-            picker.add_workload(person, chunk)
-            picker.mark_middle_heavy(person)
-            picker.mark_middle_assigned(person)
-            picker.mark_up_action(person)
-            _dbg(f"[F] 上木椅*{chunk} → {person} (workload:{picker.workload[person]})")
-        else:
-            middle.add_vacancy(f"上木椅*{chunk}")
-            _dbg(f"[F] 上木椅*{chunk} → 【空缺】")
-        rem_up_chairs -= chunk
 
     # ── 鋼琴椅 ───────────────────────────────────────────────────
     prev_has_piano = bool(prev_people.piano_players)
@@ -688,7 +518,6 @@ def generate_transition(
         if person:
             middle.add(person, "上鋼琴椅*1")
             picker.add_workload(person, 1)
-            picker.mark_middle_heavy(person)
             picker.mark_middle_assigned(person)
             picker.mark_up_action(person)
             _dbg(f"[F] 上鋼琴椅*1 → {person} (workload:{picker.workload[person]})")
@@ -701,7 +530,6 @@ def generate_transition(
         if person:
             middle.add(person, "下鋼琴椅*1")
             picker.add_workload(person, 1)
-            picker.mark_middle_heavy(person)
             picker.mark_middle_assigned(person)
             picker.mark_down_action(person)
             _dbg(f"[F] 下鋼琴椅*1 → {person} (workload:{picker.workload[person]})")
