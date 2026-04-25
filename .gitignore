@@ -4,3 +4,5 @@
 細流第*版.xlsx
 __pycache__/*
 guzheng/__pycache__/*.cpython-312.pyc
+*/config*
+guzheng/config.py
