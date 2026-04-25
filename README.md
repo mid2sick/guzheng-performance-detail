@@ -8,8 +8,8 @@
 python generate_guzheng_flow.py [--source 古箏社公演_資料整合檔_0317.xlsx] [--output 細流第XX版.xlsx] [--debug]
 ```
 
-所有可調整參數（檔案路徑、時間設定、布幕人員等）集中在 `guzheng/config.py`。
-**重要**：請先將 `guzheng/config.py.example` 複製一份後更名為：`guzheng/config.py`，然後填完相關參數，再去執行程式。
+- 所有可調整參數（檔案路徑、時間設定、布幕人員等）集中在 `guzheng/config.py`。
+- **重要**：請先將 `guzheng/config.py.example` 複製一份後更名為：`guzheng/config.py`，然後填完相關參數，再去執行程式。
 
 ---
 
